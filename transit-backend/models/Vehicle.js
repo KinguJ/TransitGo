@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-const VehicleSchema = new mongoose.Schema({
+const vehicleSchema = new mongoose.Schema({
   type: {
     type: String,
     enum: ['Metro', 'Bus', 'Tram'],
@@ -10,25 +10,29 @@ const VehicleSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  location: {
-    latitude: Number,
-    longitude: Number
-  },
   route: {
-    destination: String,
-    mainStations: [String]
+    destination: {
+      type: String,
+      required: true
+    },
+    platform: {
+      type: Number,
+      required: true
+    }
   },
   schedule: {
-    frequency: Number, // in minutes
-    firstDeparture: String, // HH:mm format
-    lastDeparture: String, // HH:mm format
-    weekdayOnly: Boolean
+    frequency: {
+      type: Number,  // in minutes
+      required: true
+    },
+    startTime: String,  // HH:mm format
+    endTime: String    // HH:mm format
   },
   status: {
     type: String,
-    enum: ['On Time', 'Delayed', 'Out of Service'],
+    enum: ['On Time', 'Delayed', 'Approaching'],
     default: 'On Time'
   }
-});
+}, { timestamps: true });
 
-module.exports = mongoose.model('Vehicle', VehicleSchema);
+module.exports = mongoose.model('Vehicle', vehicleSchema);

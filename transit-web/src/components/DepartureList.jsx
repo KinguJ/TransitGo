@@ -27,10 +27,9 @@ const DepartureList = () => {
   const [departures, setDepartures] = useState([]);
 
   useEffect(() => {
-    // Fetch departures from backend
     const fetchDepartures = async () => {
       try {
-        const response = await fetch('http://localhost:5000/api/vehicles');
+        const response = await fetch('http://127.0.0.1:5000/api/vehicles');
         const vehicles = await response.json();
         
         // Transform vehicle data into departure format
@@ -56,7 +55,7 @@ const DepartureList = () => {
     };
 
     fetchDepartures();
-    const interval = setInterval(fetchDepartures, 5000); // Update every minute
+    const interval = setInterval(fetchDepartures, 20000); // Changed to 20 seconds as per your previous setting
 
     return () => clearInterval(interval);
   }, []);
