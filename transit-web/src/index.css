@@ -15,3 +15,40 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+.bus-stop-icon {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.bus-stop-icon div {
+  width: 16px;
+  height: 16px;
+  background-color: #EF4444;
+  border-radius: 50%;
+  border: 2px solid white;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.custom-bus-stop {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.custom-bus-stop svg {
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.25));
+}
+
+/* Add these styles for stop icons */
+.stop-icon-outbound {
+  filter: hue-rotate(120deg) saturate(1.5);
+}
+
+.stop-icon-inbound {
+  filter: hue-rotate(240deg) saturate(1.5);
+}
+
+.stop-icon-both {
+  filter: grayscale(0.5);
+}
