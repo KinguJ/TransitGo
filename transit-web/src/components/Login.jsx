@@ -26,7 +26,7 @@ const Login = ({ onClose }) => {
     
     try {
       console.log('Attempting login with email:', email);
-      const response = await axios.post('/api/users/login', { email, password });
+      const response = await axios.post('/users/login', { email, password });
       console.log('Login response received:', response.data);
       
       if (response.data.token) {

@@ -1,12 +1,8 @@
 const express = require('express');
-const cors = require('cors');
+const router = express.Router();
 const Stop = require('../models/Stop');
 const Vehicle = require('../models/Vehicle');
 const Line = require('../models/Line');
-
-const router = express.Router();
-
-router.use(cors());  // Enable CORS for all routes
 
 // Add at the top of the file
 router.use((req, res, next) => {

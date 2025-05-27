@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import Navbar from './components/Navbar';
-import MapView from './components/MapView';
 import DepartureList from './components/DepartureList';
 import TransportOptions from './components/TransportOptions';
 import NearbyStations from './components/NearbyStations';
@@ -11,6 +10,10 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './components/Login';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate } from 'react-router-dom';
 import AdminMap from './components/admin/AdminMap';
+import BusPage from './components/BusPage';
+import MetroPage from './components/MetroPage';
+import TramPage from './components/TramPage';
+import RouteMap from './components/RouteMap';
 
 // Create a wrapper component that uses the auth context
 const AppContent = () => {
@@ -37,10 +40,7 @@ const AppContent = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Navbar />
-      <section className="relative">
-        <MapView />
-      </section>
+      <Navbar onLoginClick={handleLoginClick} />
       <DepartureList />
       <TransportOptions />
       <NearbyStations />
@@ -73,6 +73,10 @@ function App() {
       <AuthProvider>
         <Routes>
           <Route path="/" element={<AppContent />} />
+          <Route path="/transport/bus" element={<BusPage />} />
+          <Route path="/transport/metro" element={<MetroPage />} />
+          <Route path="/transport/tram" element={<TramPage />} />
+          <Route path="/line/:lineId" element={<RouteMap />} />
           <Route 
             path="/admin" 
             element={

@@ -1,16 +1,26 @@
 const express = require('express');
 const mongoose = require('mongoose');
-require('dotenv').config();
 const cors = require('cors');
+require('dotenv').config();
 
 const app = express();
 
-// CORS headers middleware
-app.use(cors());
+// Enable CORS for frontend
+app.use(cors({
+  origin: 'http://localhost:3000',
+  credentials: true
+}));
 
 // Request logging middleware
 app.use((req, res, next) => {
     console.log(`${req.method} ${req.url}`);
+    next();
+});
+
+// Add this after your CORS middleware
+app.use((req, res, next) => {
+    console.log('Request headers:', req.headers);
+    console.log('Request method:', req.method);
     next();
 });
 
@@ -54,12 +64,20 @@ app.use((req, res) => {
 mongoose.connect(process.env.MONGO_URI)
     .then(() => {
         console.log('MongoDB Connected');
-        const PORT = process.env.PORT || 5000;
-        const HOST = '127.0.0.1';
+        const startServer = (port) => {
+            app.listen(port, () => {
+                console.log(`Server running at http://localhost:${port}`);
+            }).on('error', (err) => {
+                if (err.code === 'EADDRINUSE') {
+                    console.log(`Port ${port} is busy, trying ${port + 1}`);
+                    startServer(port + 1);
+                } else {
+                    console.error('Server error:', err);
+                }
+            });
+        };
         
-        app.listen(PORT, HOST, () => {
-            console.log(`Server running at http://${HOST}:${PORT}`);
-        });
+        startServer(5000);
     })
     .catch(err => {
         console.error('MongoDB connection error:', err);

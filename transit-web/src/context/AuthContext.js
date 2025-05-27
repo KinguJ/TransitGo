@@ -12,7 +12,7 @@ export const AuthProvider = ({ children }) => {
     try {
       // Try /me endpoint first
       try {
-        const response = await axios.get('/api/users/me');
+        const response = await axios.get('/users/me');
         console.log('User data loaded from /me:', response.data);
         setUser(response.data);
         sessionStorage.setItem('user', JSON.stringify(response.data));
@@ -22,7 +22,7 @@ export const AuthProvider = ({ children }) => {
       }
 
       // Fallback to /users endpoint
-      const response = await axios.get('/api/users');
+      const response = await axios.get('/users');
       // Just get the first user since the endpoint is protected and will only return our user
       const userData = response.data[0];
       

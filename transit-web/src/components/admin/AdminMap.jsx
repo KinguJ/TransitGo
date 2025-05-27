@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
 import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';  // Add Leaflet CSS import
 import axios from '../../utils/axios';
 import EditStopsPanel from './EditStopsPanel';
 import EditVehiclesPanel from './EditVehiclesPanel';
@@ -43,7 +44,7 @@ const initVehicleState = (vehicles, lines) =>
           pauseUntil: 0,           
           direction: line?.direction || 'Outbound',
           lastTrafficCheck: 0,
-          lastStopCheck: 0,
+          visitedStops: new Set(),  // Always initialize visitedStops
         },
       ];
     })
@@ -94,9 +95,9 @@ const AdminMap = () => {
     try {
       setLoading(true);
       const [stopsRes, linesRes, vehiclesRes] = await Promise.all([
-        axios.get('/api/stops'),
-        axios.get('/api/lines'),
-        axios.get('/api/vehicles')
+        axios.get('/stops'),
+        axios.get('/lines'),
+        axios.get('/vehicles')
       ]);
 
       setStops(stopsRes.data);
@@ -275,6 +276,11 @@ const AdminMap = () => {
         const st = vs[v._id];
         if (!st) return;
 
+        // Safety check for visitedStops
+        if (!st.visitedStops) {
+          st.visitedStops = new Set();
+        }
+
         // Get the line and its stops for the current direction
         const line = lines.find(l => l._id === v.lineId);
 
@@ -293,6 +299,7 @@ const AdminMap = () => {
         if (st.progress >= 1) {
           st.progress = 0;
           st.direction = st.direction === 'Outbound' ? 'Inbound' : 'Outbound';
+          st.visitedStops.clear();  // Clear visited stops when changing direction
         }
 
         /* -------- check stop proximity -------- */
@@ -300,24 +307,36 @@ const AdminMap = () => {
         const nextPos = getPositionAlongPath(path, st.progress + 0.001);
         if (!pos || !nextPos) return;
 
+        const STOP_RADIUS = 20;            // m
+        const MIN_GAP = 0.03;             // skip stops clearly behind the bus
+
         // Check all stops on this line
-        line.stopIds.forEach((stopId, index) => {
+        line.stopIds.forEach((stopId, idx) => {
+          if (st.visitedStops.has(stopId)) return;  // already served this stop
+
           const stop = stops.find(s => s._id === stopId);
           if (!stop) return;
 
-          // Only stop if the stop's direction matches the vehicle's direction or is "Both"
           if (stop.direction !== 'Both' && stop.direction !== st.direction) return;
 
-          const stopPos = [stop.location.coordinates[1], stop.location.coordinates[0]];
-          const distance = L.latLng(pos).distanceTo(L.latLng(stopPos));
+          const stopPos = [
+            stop.location.coordinates[1],
+            stop.location.coordinates[0],
+          ];
+          const dist = L.latLng(pos).distanceTo(L.latLng(stopPos));
 
-          // Calculate stop's approximate progress along the route
-          const stopProgress = index / (line.stopIds.length - 1);
+          // progress of this stop along the *current* direction
+          const stopProg = idx / (line.stopIds.length - 1);
 
-          // Only check stops we haven't passed yet (with some buffer)
-          if (distance < 20 && st.progress < stopProgress + 0.1 && st.progress > stopProgress - 0.1) {
-            console.log(`Bus ${v._id} stopping at stop ${stop.name} (${stopId}), distance: ${distance.toFixed(2)}m`);
-            st.pauseUntil = now + 1000; // 1 second stop
+          // skip if we are already past the stop by more than MIN_GAP
+          if (st.progress > stopProg + MIN_GAP) return;
+
+          if (dist < STOP_RADIUS) {
+            // snap the bus exactly onto the stop, pause, mark visited
+            newPositions[v._id] = stopPos;      // optional, looks cleaner
+            st.pauseUntil = now + 1000;         // 1 s dwell time
+            st.visitedStops.add(stopId);
+            console.log(`Bus ${v._id} served stop ${stop.name}`);
           }
         });
 
@@ -340,6 +359,12 @@ const AdminMap = () => {
       if (frameCount >= 1) {
         frameCount = 0;
         forceUpdate({});
+        
+        // Broadcast vehicle states to DepartureList
+        window.postMessage({
+          type: 'vehicleStateUpdate',
+          states: vehicleStateRef.current
+        }, '*');
       }
 
       animationRef.current = requestAnimationFrame(frame);
