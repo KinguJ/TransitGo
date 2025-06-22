@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from '../utils/axios';
+import { SimClock } from './SimClock'
+import { useDevClock } from '../context/ClockContext';
 
 // Helper function to normalize MongoDB ObjectId
 const normalizeId = (id) => {
@@ -15,6 +17,41 @@ const BusPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
+  const simNow = useDevClock(); // Use dev clock instead of real time
+
+  const calculateNextDeparture = (schedule) => {
+    if (!schedule?.firstDeparture || !schedule?.lastDeparture) {
+      return 'Schedule unavailable';
+    }
+
+    const currentHour = simNow.getHours();
+    const currentMinute = simNow.getMinutes();
+    const currentTime = currentHour * 60 + currentMinute;
+
+    const [firstHour, firstMinute] = schedule.firstDeparture.split(':').map(Number);
+    const [lastHour, lastMinute] = schedule.lastDeparture.split(':').map(Number);
+    
+    const firstTime = firstHour * 60 + firstMinute;
+    const lastTime = lastHour * 60 + lastMinute;
+
+    // If current time is before first departure
+    if (currentTime < firstTime) {
+      const minutesUntil = firstTime - currentTime;
+      return `${minutesUntil} min`;
+    }
+
+    // If current time is after last departure
+    if (currentTime > lastTime) {
+      return 'Service ended';
+    }
+
+    // Use the actual frequency from the schedule instead of assuming 15 minutes
+    const frequency = parseInt(schedule.frequency) || 15;
+    const minutesSinceLastDeparture = (currentTime - firstTime) % frequency;
+    const minutesUntilNext = frequency - minutesSinceLastDeparture;
+
+    return `${minutesUntilNext} min`;
+  };
 
   useEffect(() => {
     const fetchBusRoutes = async () => {
@@ -24,55 +61,47 @@ const BusPage = () => {
           axios.get('/vehicles')
         ]);
 
-        // Log the response format
-        console.log('Lines response:', linesRes.data[0]);
-        console.log('Vehicles response:', vehiclesRes.data[0]);
-
-        // Filter bus vehicles first
+        // Filter for bus vehicles first
         const busVehicles = vehiclesRes.data.filter(v => v.type === 'Bus');
         
         // Get the line IDs that have bus vehicles
         const busLineIds = new Set(busVehicles.map(v => normalizeId(v.lineId)));
         
-        // Filter lines that have bus vehicles
+        // Filter for inbound bus lines only
         const busLines = linesRes.data.filter(line => 
-          busLineIds.has(normalizeId(line._id))
+          busLineIds.has(normalizeId(line._id)) && 
+          line.direction === 'Inbound'  // Only show inbound lines
         );
 
-        // Combine line and vehicle data
+        // Map the filtered lines to route objects
         const routes = busLines.map(line => {
-          const vehicle = busVehicles.find(v => 
+          const lineVehicles = busVehicles.filter(v => 
             normalizeId(v.lineId) === normalizeId(line._id)
           );
-          const [, destination] = line.longName.split(' → ');
-          
+
           return {
-            id: normalizeId(line._id),
+            id: line._id,
             routeNumber: line.number,
             name: line.longName,
-            status: vehicle?.status || 'Unknown',
-            nextDeparture: vehicle ? '5 min' : 'No vehicle assigned', // This should come from a schedule API
-            destination: destination || 'Unknown Destination',
-            occupancy: vehicle?.occupancy || 'Unknown',
             direction: line.direction,
-            schedule: {
-              firstDeparture: line.schedule?.firstDeparture,
-              lastDeparture: line.schedule?.lastDeparture
-            }
+            schedule: line.schedule,
+            status: lineVehicles[0]?.status || 'Unknown',
+            occupancy: lineVehicles[0]?.occupancy || 'Unknown',
+            nextDeparture: calculateNextDeparture(line.schedule)
           };
         });
 
         setBusRoutes(routes);
         setLoading(false);
       } catch (err) {
-        console.error('Error fetching data:', err);
+        console.error('Error fetching bus routes:', err);
         setError(err.message);
         setLoading(false);
       }
     };
 
     fetchBusRoutes();
-  }, []);
+  }, [simNow]);
 
   const handleRouteClick = (lineId) => {
     navigate(`/line/${lineId}`);
@@ -192,6 +221,7 @@ const BusPage = () => {
             </ul>
           </div>
         )}
+        <SimClock />
       </div>
     </div>
   );

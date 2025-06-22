@@ -31,12 +31,14 @@ const userRoutes = require('./routes/userRoutes');
 const vehicleRoutes = require('./routes/vehicleRoutes');
 const lineRoutes = require('./routes/lineRoutes');
 const stopRoutes = require('./routes/stopRoutes');
+const cardRoutes = require('./routes/cardRoutes');
 
 // Mount routes BEFORE error handlers and 404
 app.use('/api/users', userRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/lines', lineRoutes);
 app.use('/api/stops', stopRoutes);
+app.use('/api/cards', cardRoutes);
 
 // Basic route to test API is working
 app.get('/', (req, res) => {

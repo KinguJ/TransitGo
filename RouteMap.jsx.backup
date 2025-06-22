@@ -27,12 +27,84 @@ const vehicleIcon = new L.Icon({
   popupAnchor: [0, -16]
 });
 
+// Initialize vehicle state
+const initVehicleState = (vehicles, lines) =>
+  Object.fromEntries(
+    vehicles.map(v => {
+      const line = lines.find(l => l._id === v.lineId);
+      return [
+        v._id,
+        {
+          progress: 0,
+          speed: 2500 + Math.random() * 1500,
+          pauseUntil: 0,
+          direction: line?.direction || 'Outbound',
+          lastTrafficCheck: 0,
+          visitedStops: new Set(),
+          completed: false,
+        },
+      ];
+    })
+  );
+
 // Helper function to normalize MongoDB ObjectId
 const normalizeId = (id) => {
   if (!id) return null;
   if (typeof id === 'string') return id;
   if (typeof id === 'object' && id.$oid) return id.$oid;
   return String(id);
+};
+
+// Add this helper function at the top
+const getNextDepartureTime = (schedule, currentTime) => {
+  const { firstDeparture, lastDeparture } = schedule;
+  const [firstHour, firstMinute] = firstDeparture.split(':').map(Number);
+  const [lastHour, lastMinute] = lastDeparture.split(':').map(Number);
+  
+  const currentHour = currentTime.getHours();
+  const currentMinute = currentTime.getMinutes();
+  
+  // Convert all times to minutes since midnight
+  const currentTimeInMinutes = currentHour * 60 + currentMinute;
+  const firstDepartureInMinutes = firstHour * 60 + firstMinute;
+  const lastDepartureInMinutes = lastHour * 60 + lastMinute;
+
+  // Hardcoded 30-minute frequency
+  const FREQUENCY = 30;
+
+  // If before first departure
+  if (currentTimeInMinutes < firstDepartureInMinutes) {
+    return new Date(currentTime.setHours(firstHour, firstMinute, 0, 0));
+  }
+
+  // If after last departure
+  if (currentTimeInMinutes > lastDepartureInMinutes) {
+    // Set to next day's first departure
+    const tomorrow = new Date(currentTime);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return new Date(tomorrow.setHours(firstHour, firstMinute, 0, 0));
+  }
+
+  // Calculate next departure based on 30-minute frequency
+  const minutesSinceFirst = currentTimeInMinutes - firstDepartureInMinutes;
+  const nextInterval = Math.ceil(minutesSinceFirst / FREQUENCY);
+  const nextDepartureMinutes = firstDepartureInMinutes + (nextInterval * FREQUENCY);
+
+  // If next calculated departure would be after last departure,
+  // return next day's first departure
+  if (nextDepartureMinutes > lastDepartureInMinutes) {
+    const tomorrow = new Date(currentTime);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return new Date(tomorrow.setHours(firstHour, firstMinute, 0, 0));
+  }
+
+  const nextTime = new Date(currentTime);
+  nextTime.setHours(Math.floor(nextDepartureMinutes / 60));
+  nextTime.setMinutes(nextDepartureMinutes % 60);
+  nextTime.setSeconds(0);
+  nextTime.setMilliseconds(0);
+
+  return nextTime;
 };
 
 const RouteMap = () => {

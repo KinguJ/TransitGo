@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { FaUserCircle } from 'react-icons/fa';
 import { useAuth } from '../context/AuthContext';
+import { useDevClock } from '../context/ClockContext';
 import Login from './Login';
 import Register from './Register';
 import { Link } from 'react-router-dom';
 
 const Navbar = () => {
   const { user, logout } = useAuth();
+  const simNow = useDevClock();
   const [showDropdown, setShowDropdown] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
@@ -47,6 +49,14 @@ const Navbar = () => {
                 <span className="absolute left-3 top-1/2 transform -translate-y-1/2">
                   🔍
                 </span>
+              </div>
+            </div>
+
+            {/* Dev Clock */}
+            <div className="flex items-center">
+              <div className="bg-gray-100 px-3 py-2 rounded-lg border">
+                <div className="text-xs text-gray-500 uppercase tracking-wide">Sim Time</div>
+                <div className="text-sm font-semibold text-gray-900">{simNow.toLocaleTimeString()}</div>
               </div>
             </div>
 

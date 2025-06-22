@@ -3,6 +3,32 @@ import axios from '../utils/axios';
 
 const AuthContext = createContext(null);
 
+// Helper function to safely access storage
+const safeStorageGet = (storageType, key) => {
+  try {
+    return storageType.getItem(key);
+  } catch (error) {
+    console.warn(`Cannot access ${storageType === localStorage ? 'localStorage' : 'sessionStorage'}:`, error);
+    return null;
+  }
+};
+
+const safeStorageSet = (storageType, key, value) => {
+  try {
+    storageType.setItem(key, value);
+  } catch (error) {
+    console.warn(`Cannot set ${storageType === localStorage ? 'localStorage' : 'sessionStorage'}:`, error);
+  }
+};
+
+const safeStorageRemove = (storageType, key) => {
+  try {
+    storageType.removeItem(key);
+  } catch (error) {
+    console.warn(`Cannot remove from ${storageType === localStorage ? 'localStorage' : 'sessionStorage'}:`, error);
+  }
+};
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -15,7 +41,7 @@ export const AuthProvider = ({ children }) => {
         const response = await axios.get('/users/me');
         console.log('User data loaded from /me:', response.data);
         setUser(response.data);
-        sessionStorage.setItem('user', JSON.stringify(response.data));
+        safeStorageSet(sessionStorage, 'user', JSON.stringify(response.data));
         return;
       } catch (meError) {
         console.log('Falling back to /users endpoint');
@@ -32,7 +58,7 @@ export const AuthProvider = ({ children }) => {
 
       console.log('User data loaded from /users:', userData);
       setUser(userData);
-      sessionStorage.setItem('user', JSON.stringify(userData));
+      safeStorageSet(sessionStorage, 'user', JSON.stringify(userData));
     } catch (error) {
       console.error('Failed to load user:', error.response?.data || error.message);
       logout();
@@ -42,7 +68,7 @@ export const AuthProvider = ({ children }) => {
   const login = async (token) => {
     console.log('Login called with token:', token);
     try {
-      localStorage.setItem('token', token);
+      safeStorageSet(localStorage, 'token', token);
       // Set token in axios headers immediately
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       await loadUser(token);
@@ -56,8 +82,8 @@ export const AuthProvider = ({ children }) => {
 
   const logout = () => {
     console.log('Logging out');
-    localStorage.removeItem('token');
-    sessionStorage.removeItem('user');
+    safeStorageRemove(localStorage, 'token');
+    safeStorageRemove(sessionStorage, 'user');
     delete axios.defaults.headers.common['Authorization'];
     setUser(null);
   };
@@ -65,7 +91,7 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const initAuth = async () => {
       console.log('Initializing auth');
-      const token = localStorage.getItem('token');
+      const token = safeStorageGet(localStorage, 'token');
       console.log('Found token:', token ? 'yes' : 'no');
       
       if (token) {

@@ -17,6 +17,60 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Get nearby stops (useful for validation)
+router.get('/nearby', async (req, res) => {
+  try {
+    const { lng, lat } = req.query;
+    const nearbyStops = await Stop.find({
+      location: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: [parseFloat(lng), parseFloat(lat)]
+          },
+          $maxDistance: 10000 // 20 meters
+        }
+      }
+    }).limit(4);
+    res.json(nearbyStops);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get the single closest stop
+router.get('/nearest', async (req, res) => {
+  try {
+    const lng = parseFloat(req.query.lng);
+    const lat = parseFloat(req.query.lat ?? req.query.alt);
+
+    if (Number.isNaN(lng) || Number.isNaN(lat)) {
+      return res.status(400).json({ error: 'lng and lat/alt are required' });
+    }
+
+    // Use the same approach as /nearby but limit to 1 result
+    const [nearest] = await Stop.find({
+      location: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: [lng, lat]
+          },
+          $maxDistance: 10000 // 10km in meters
+        }
+      }
+    }).limit(1);
+
+    if (!nearest) {
+      return res.status(404).json({ message: 'No stop found' });
+    }
+    res.json(nearest);
+  } catch (err) {
+    console.error('Error in /nearest:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Create new stop
 router.post('/', async (req, res) => {
   try {
@@ -37,27 +91,6 @@ router.post('/', async (req, res) => {
     res.status(201).json(stop);
   } catch (error) {
     console.error('Error creating stop:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get nearby stops (useful for validation)
-router.get('/nearby', async (req, res) => {
-  try {
-    const { lng, lat } = req.query;
-    const nearbyStops = await Stop.find({
-      location: {
-        $near: {
-          $geometry: {
-            type: 'Point',
-            coordinates: [parseFloat(lng), parseFloat(lat)]
-          },
-          $maxDistance: 20 // 20 meters
-        }
-      }
-    });
-    res.json(nearbyStops);
-  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });

@@ -6,6 +6,7 @@ import NearbyStations from './components/NearbyStations';
 import TripPlanner from './components/TripPlanner';
 import AppPromo from './components/AppPromo';
 import Footer from './components/Footer';
+import TransitCards from './components/TransitCards';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './components/Login';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate } from 'react-router-dom';
@@ -19,20 +20,6 @@ import RouteMap from './components/RouteMap';
 const AppContent = () => {
   const { user } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
-  const transitCards = [
-    {
-      name: "Unlimited Pass",
-      cardNumber: "**** **** **** 1234",
-      balance: "42.50",
-      expiryDate: "12/31/2025"
-    },
-    {
-      name: "Standard Pass",
-      cardNumber: "**** **** **** 5678",
-      balance: "25.75",
-      expiryDate: "06/30/2024"
-    }
-  ];
 
   const handleLoginClick = () => {
     setShowLogin(true);
@@ -42,10 +29,11 @@ const AppContent = () => {
     <div className="min-h-screen bg-gray-50">
       <Navbar onLoginClick={handleLoginClick} />
       <DepartureList />
+      <TransitCards onLoginClick={handleLoginClick} />
       <TransportOptions />
       <NearbyStations />
       <TripPlanner />
-      <AppPromo />
+      {/* <AppPromo /> */}
       <Footer />
       {showLogin && <Login onClose={() => setShowLogin(false)} />}
     </div>
