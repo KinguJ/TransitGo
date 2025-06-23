@@ -49,7 +49,7 @@ const EditVehiclesPanel = ({ onDone, vehicles, setVehicles, lines }) => {
         return;
       }
 
-      const response = await axios.post('/api/vehicles', currentVehicle);
+      const response = await axios.post('/vehicles', currentVehicle);
       setVehicles(prev => [...prev, response.data]);
       setCurrentVehicle({
         number: '',
@@ -69,7 +69,7 @@ const EditVehiclesPanel = ({ onDone, vehicles, setVehicles, lines }) => {
 
   const handleUpdateVehicle = async () => {
     try {
-      const response = await axios.patch(`/api/vehicles/${selectedVehicle._id}`, {
+      const response = await axios.patch(`/vehicles/${selectedVehicle._id}`, {
         number: selectedVehicle.number,
         type: selectedVehicle.type,
         status: selectedVehicle.status,
@@ -89,7 +89,7 @@ const EditVehiclesPanel = ({ onDone, vehicles, setVehicles, lines }) => {
 
   const handleDeleteVehicle = async (vehicleId) => {
     try {
-      await axios.delete(`/api/vehicles/${vehicleId}`);
+      await axios.delete(`/vehicles/${vehicleId}`);
       setVehicles(prevVehicles => prevVehicles.filter(vehicle => vehicle._id !== vehicleId));
       setSelectedVehicle(null);
       setError(null);

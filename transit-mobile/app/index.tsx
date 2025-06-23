@@ -1,4 +1,4 @@
-import HomeScreen from './HomeScreen';
+import HomeScreen from './home';
 
 export default function Index() {
   return <HomeScreen />;

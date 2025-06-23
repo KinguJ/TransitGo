@@ -4,17 +4,20 @@ import axios from '../../utils/axios';
 import { getRouteCoordinates } from '../../utils/osrm';
 import L from 'leaflet';
 
-const EditLinesPanel = ({ onDone, lines, setLines, stops, onLineSelect, selectedLineId, panelMode, selectedStopId }) => {
+const EditLinesPanel = ({ onDone, lines, setLines, stops, vehicles, onLineSelect, selectedLineId, panelMode, selectedStopId }) => {
   const [mode, setMode] = useState('add');
   const [isSelectingStops, setIsSelectingStops] = useState(false);
   const [currentLine, setCurrentLine] = useState({
     number: '',
     longName: '',
-    direction: 'Outbound',
+    type: '',
+    direction: '',
+    vehicle: '',
     stopIds: [],
     schedule: {
-      firstDeparture: '06:00',
-      lastDeparture: '23:00'
+      firstDeparture: '',
+      lastDeparture: '',
+      frequency: ''
     }
   });
   const [selectedLine, setSelectedLine] = useState(null);
@@ -42,25 +45,58 @@ const EditLinesPanel = ({ onDone, lines, setLines, stops, onLineSelect, selected
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
+    
     if (mode === 'add') {
       if (name.startsWith('schedule.')) {
         const scheduleField = name.split('.')[1];
         setCurrentLine(prev => ({
           ...prev,
-          schedule: { ...prev.schedule, [scheduleField]: value }
+          schedule: { 
+            ...prev.schedule, 
+            [scheduleField]: value 
+          }
         }));
       } else {
-        setCurrentLine(prev => ({ ...prev, [name]: value }));
+        setCurrentLine(prev => {
+          const updates = { [name]: value };
+          
+          // Auto-set direction to 'Both' for Metro and Tram
+          if (name === 'type' && (value === 'Metro' || value === 'Tram')) {
+            updates.direction = 'Both';
+          }
+          // For Bus, only reset if direction was 'Both' (don't override user's choice)
+          else if (name === 'type' && value === 'Bus' && prev.direction === 'Both') {
+            updates.direction = '';
+          }
+          
+          return { ...prev, ...updates };
+        });
       }
     } else if (selectedLine) {
       if (name.startsWith('schedule.')) {
         const scheduleField = name.split('.')[1];
         setSelectedLine(prev => ({
           ...prev,
-          schedule: { ...prev.schedule, [scheduleField]: value }
+          schedule: { 
+            ...prev.schedule, 
+            [scheduleField]: value 
+          }
         }));
       } else {
-        setSelectedLine(prev => ({ ...prev, [name]: value }));
+        setSelectedLine(prev => {
+          const updates = { [name]: value };
+          
+          // Auto-set direction to 'Both' for Metro and Tram
+          if (name === 'type' && (value === 'Metro' || value === 'Tram')) {
+            updates.direction = 'Both';
+          }
+          // For Bus, only reset if direction was 'Both' (don't override user's choice)
+          else if (name === 'type' && value === 'Bus' && prev.direction === 'Both') {
+            updates.direction = '';
+          }
+          
+          return { ...prev, ...updates };
+        });
       }
     }
   };
@@ -126,16 +162,39 @@ const EditLinesPanel = ({ onDone, lines, setLines, stops, onLineSelect, selected
         return;
       }
 
-      const response = await axios.post('/api/lines', currentLine);
+      if (!currentLine.type) {
+        setError('Please select a transport type');
+        return;
+      }
+
+      if (!currentLine.direction) {
+        setError('Please select a direction');
+        return;
+      }
+
+      if (!currentLine.schedule.frequency || parseInt(currentLine.schedule.frequency) < 1) {
+        setError('Please enter a valid frequency (minimum 1 minute)');
+        return;
+      }
+
+      if (!currentLine.schedule.firstDeparture || !currentLine.schedule.lastDeparture) {
+        setError('Please enter first and last departure times');
+        return;
+      }
+
+      const response = await axios.post('/lines', currentLine);
       setLines(prev => [...prev, response.data]);
       setCurrentLine({
         number: '',
         longName: '',
-        direction: 'Outbound',
+        type: '',
+        direction: '',
+        vehicle: '',
         stopIds: [],
         schedule: {
-          firstDeparture: '06:00',
-          lastDeparture: '23:00'
+          firstDeparture: '',
+          lastDeparture: '',
+          frequency: ''
         }
       });
       setError(null);
@@ -151,7 +210,27 @@ const EditLinesPanel = ({ onDone, lines, setLines, stops, onLineSelect, selected
         return;
       }
 
-      const response = await axios.patch(`/api/lines/${selectedLine._id}`, selectedLine);
+      if (!selectedLine.type) {
+        setError('Please select a transport type');
+        return;
+      }
+
+      if (!selectedLine.direction) {
+        setError('Please select a direction');
+        return;
+      }
+
+      if (!selectedLine.schedule.frequency || parseInt(selectedLine.schedule.frequency) < 1) {
+        setError('Please enter a valid frequency (minimum 1 minute)');
+        return;
+      }
+
+      if (!selectedLine.schedule.firstDeparture || !selectedLine.schedule.lastDeparture) {
+        setError('Please enter first and last departure times');
+        return;
+      }
+
+      const response = await axios.patch(`/lines/${selectedLine._id}`, selectedLine);
       setLines(prevLines => prevLines.map(line => 
         line._id === selectedLine._id ? response.data : line
       ));
@@ -164,7 +243,7 @@ const EditLinesPanel = ({ onDone, lines, setLines, stops, onLineSelect, selected
 
   const handleDeleteLine = async (lineId) => {
     try {
-      await axios.delete(`/api/lines/${lineId}`);
+      await axios.delete(`/lines/${lineId}`);
       setLines(prevLines => prevLines.filter(line => line._id !== lineId));
       setSelectedLine(null);
       setError(null);
@@ -178,8 +257,35 @@ const EditLinesPanel = ({ onDone, lines, setLines, stops, onLineSelect, selected
     return stop ? stop.name : 'Unknown Stop';
   };
 
+  const getVehicleName = (vehicleId) => {
+    if (!vehicleId) return 'No vehicle assigned';
+    const vehicle = vehicles?.find(v => v._id === vehicleId);
+    return vehicle ? `${vehicle.type} ${vehicle.number}` : 'Unknown Vehicle';
+  };
+
   const handleSelectLine = async (line) => {
-    setSelectedLine(line);
+    // Only provide fallbacks for undefined values to prevent controlled/uncontrolled input issues
+    // but preserve the actual fetched data
+    const lineWithSafeValues = {
+      ...line,
+      number: line.number ?? '',
+      longName: line.longName ?? '',
+      type: line.type ?? undefined, // Don't force a default, let it be undefined if not set
+      direction: line.direction ?? undefined, // Don't force a default, let it be undefined if not set
+      vehicle: line.vehicle ?? '', // Vehicle reference
+      schedule: line.schedule ? {
+        firstDeparture: line.schedule.firstDeparture ?? '',
+        lastDeparture: line.schedule.lastDeparture ?? '',
+        frequency: line.schedule.frequency ?? '',
+        ...line.schedule
+      } : {
+        firstDeparture: '',
+        lastDeparture: '',
+        frequency: ''
+      }
+    };
+    
+    setSelectedLine(lineWithSafeValues);
 
     // 1 · collect WGS84 points for this line, in order
     const pts = line.stopIds.map(id => {
@@ -187,10 +293,11 @@ const EditLinesPanel = ({ onDone, lines, setLines, stops, onLineSelect, selected
       return [s.location.coordinates[1], s.location.coordinates[0]]; // [lat,lng]
     });
 
-    // 2 · fetch snapped route from OSRM
+    // 2 · fetch snapped route from OSRM (or straight lines for Metro/Tram)
     let path = [];
     try { 
-      path = await getRouteCoordinates(pts); 
+      const transportType = line.type || 'Bus';
+      path = await getRouteCoordinates(pts, transportType); 
     } catch { 
       path = pts; 
     }
@@ -203,7 +310,9 @@ const EditLinesPanel = ({ onDone, lines, setLines, stops, onLineSelect, selected
   const handleModeSwitch = (newMode) => {
     setMode(newMode);
     setSelectedLine(null);
+    setIsSelectingStops(false);
     onLineSelect(null, []);
+    setError(null);
   };
 
   const toggleStopSelection = () => {
@@ -284,7 +393,7 @@ const EditLinesPanel = ({ onDone, lines, setLines, stops, onLineSelect, selected
       <input
         type="text"
         name="number"
-        value={line.number}
+        value={line.number ?? ''}
         onChange={handleInputChange}
         placeholder="Line number (e.g., 1, M1, T3)"
         className="w-full p-2 border rounded"
@@ -292,35 +401,118 @@ const EditLinesPanel = ({ onDone, lines, setLines, stops, onLineSelect, selected
       <input
         type="text"
         name="longName"
-        value={line.longName}
+        value={line.longName ?? ''}
         onChange={handleInputChange}
         placeholder="Line name (e.g., Central - Airport)"
         className="w-full p-2 border rounded"
       />
-      <select
-        name="direction"
-        value={line.direction}
-        onChange={handleInputChange}
-        className="w-full p-2 border rounded"
-      >
-        <option value="Outbound">Outbound</option>
-        <option value="Inbound">Inbound</option>
-      </select>
-      <div className="grid grid-cols-2 gap-2">
-        <input
-          type="time"
-          name="schedule.firstDeparture"
-          value={line.schedule.firstDeparture}
+      
+      {/* Transport Type */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">Transport Type</label>
+        <select
+          name="type"
+          value={line.type ?? ''}
           onChange={handleInputChange}
           className="w-full p-2 border rounded"
-        />
-        <input
-          type="time"
-          name="schedule.lastDeparture"
-          value={line.schedule.lastDeparture}
+        >
+          <option value="">Select Transport Type</option>
+          <option value="Bus">🚌 Bus</option>
+          <option value="Metro">🚇 Metro</option>
+          <option value="Tram">🚋 Tram</option>
+        </select>
+      </div>
+
+      {/* Direction - disabled for Metro/Tram since they're always 'Both' */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">Direction</label>
+        <select
+          name="direction"
+          value={line.direction ?? ''}
+          onChange={handleInputChange}
+          disabled={line.type === 'Metro' || line.type === 'Tram'}
+          className={`w-full p-2 border rounded ${
+            line.type === 'Metro' || line.type === 'Tram' 
+              ? 'bg-gray-100 text-gray-500 cursor-not-allowed' 
+              : ''
+          }`}
+        >
+          <option value="">Select Direction</option>
+          <option value="Outbound">Outbound</option>
+          <option value="Inbound">Inbound</option>
+          <option value="Both">Both Directions</option>
+        </select>
+        {(line.type === 'Metro' || line.type === 'Tram') && (
+          <p className="text-xs text-gray-500 mt-1">
+            Metro and Tram lines automatically operate in both directions
+          </p>
+        )}
+      </div>
+
+      {/* Vehicle Assignment */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">Assigned Vehicle (Optional)</label>
+        <select
+          name="vehicle"
+          value={line.vehicle ?? ''}
           onChange={handleInputChange}
           className="w-full p-2 border rounded"
-        />
+        >
+          <option value="">No vehicle assigned</option>
+          {vehicles?.filter(vehicle => 
+            // Filter vehicles by transport type if type is selected
+            !line.type || vehicle.type === line.type
+          ).map(vehicle => (
+            <option key={vehicle._id} value={vehicle._id}>
+              {vehicle.type} {vehicle.number} - {vehicle.status}
+            </option>
+          ))}
+        </select>
+        {line.type && (
+          <p className="text-xs text-gray-500 mt-1">
+            Only {line.type} vehicles are shown
+          </p>
+        )}
+      </div>
+
+      {/* Schedule */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">Schedule</label>
+        <div className="grid grid-cols-3 gap-2">
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">First Departure</label>
+            <input
+              type="time"
+              name="schedule.firstDeparture"
+              value={line.schedule?.firstDeparture ?? ''}
+              onChange={handleInputChange}
+              className="w-full p-2 border rounded text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">Last Departure</label>
+            <input
+              type="time"
+              name="schedule.lastDeparture"
+              value={line.schedule?.lastDeparture ?? ''}
+              onChange={handleInputChange}
+              className="w-full p-2 border rounded text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">Frequency (min)</label>
+            <input
+              type="number"
+              name="schedule.frequency"
+              value={line.schedule?.frequency ?? ''}
+              onChange={handleInputChange}
+              placeholder="15"
+              min="1"
+              max="120"
+              className="w-full p-2 border rounded text-sm"
+            />
+          </div>
+        </div>
       </div>
       
       {renderStopsSection(line)}
@@ -373,10 +565,18 @@ const EditLinesPanel = ({ onDone, lines, setLines, stops, onLineSelect, selected
                     ${line._id === selectedLineId ? 'bg-blue-50 border border-blue-200' : ''}`}
                 >
                   <div>
-                    <div className="font-medium">Line {line.number}</div>
+                    <div className="font-medium">
+                      {line.type === 'Metro' ? '🚇' : line.type === 'Tram' ? '🚋' : '🚌'} Line {line.number}
+                    </div>
                     <div className="text-sm text-gray-600">{line.longName}</div>
                     <div className="text-xs text-gray-500">
-                      {line.schedule.firstDeparture} - {line.schedule.lastDeparture}
+                      {line.type} • {line.direction}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {line.schedule.firstDeparture} - {line.schedule.lastDeparture} • Every {line.schedule.frequency || '15'}min
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Vehicle: {getVehicleName(line.vehicle)}
                     </div>
                   </div>
                   <button

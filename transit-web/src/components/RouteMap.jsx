@@ -11,6 +11,8 @@ import { useDevClock } from '../context/ClockContext';
 // Import icons
 import busStopIcon from '../assets/bus-stop.png';
 import busIcon from '../assets/bus-icon.png';
+import tramIcon from '../assets/tram-icon.png';
+import metroIcon from '../assets/metro-icon.png';
 
 // Create custom icons
 const stopIcon = new L.Icon({
@@ -20,12 +22,28 @@ const stopIcon = new L.Icon({
   popupAnchor: [0, -32]
 });
 
-const vehicleIcon = new L.Icon({
-  iconUrl: busIcon,
-  iconSize: [32, 32],
-  iconAnchor: [16, 16],
-  popupAnchor: [0, -16]
-});
+const createVehicleIcon = (vehicleType) => {
+  let iconUrl;
+  switch (vehicleType) {
+    case 'Metro':
+      iconUrl = metroIcon;
+      break;
+    case 'Tram':
+      iconUrl = tramIcon;
+      break;
+    case 'Bus':
+    default:
+      iconUrl = busIcon;
+      break;
+  }
+  
+  return new L.Icon({
+    iconUrl,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+    popupAnchor: [0, -16]
+  });
+};
 
 // Helper function to normalize MongoDB ObjectId
 const normalizeId = (id) => {
@@ -34,6 +52,11 @@ const normalizeId = (id) => {
   if (typeof id === 'object' && id.$oid) return id.$oid;
   return String(id);
 };
+
+// helper – km between consecutive points summed
+const pathLengthKm = (pts) =>
+  pts.reduce((d,p,i)=>
+    i ? d + L.latLng(p).distanceTo(L.latLng(pts[i-1])) : 0, 0) / 1000;
 
 const RouteMap = () => {
   const { lineId } = useParams();
@@ -134,14 +157,13 @@ const RouteMap = () => {
       return;
     }
 
-    // Get all vehicles for this bus line number (both directions)
+    // Get all vehicles for this line number (both directions)
     const allLineVehicles = apiData.vehicles.filter(v => {
       const vehicleLine = apiData.lines.find(l => 
         normalizeId(l._id) === normalizeId(v.lineId)
       );
       return vehicleLine && 
-             vehicleLine.number === activeLine.number && 
-             v.type === 'Bus';
+             vehicleLine.number === activeLine.number;
     });
 
     // Filter vehicles for current direction
@@ -169,12 +191,19 @@ const RouteMap = () => {
         stop.location.coordinates[0]
       ]);
 
-      const coords = await getRouteCoordinates(stopPoints);
+      const transportType = activeLine.type || 'Bus';
+      const coords = await getRouteCoordinates(stopPoints, transportType);
 
       // if user switched before we finished, abort
       if (liveDirRef.current !== thisRunDir) return;
       
-      pathsRef.current[direction] = coords;      // cache the path for this dir
+      // For Metro and Tram with 'Both' direction, create paths for both directions
+      if (activeLine.direction === 'Both') {
+        pathsRef.current['Outbound'] = coords;
+        pathsRef.current['Inbound'] = [...coords].reverse(); // Reverse for inbound
+      } else {
+        pathsRef.current[direction] = coords;      // cache the path for this dir
+      }
 
       if (liveDirRef.current === direction) {
         setRoutePath(coords);                    // still draw it if user is watching
@@ -211,7 +240,7 @@ const RouteMap = () => {
 
         // Handle active pause
         if (now < st.pauseUntil) {
-          const pos = getPositionAlongPath(vPath, st.progress);
+          const pos = getPositionAlongPath(vPath, st.progress, st.direction === 'Inbound');
           if (pos) newPositions[vehicleId] = pos;
           return;
         }
@@ -228,6 +257,9 @@ const RouteMap = () => {
         const progressPerSecond = speedMPS / routeLength;
         st.progress += progressPerSecond * dt;
 
+        // Safety: never exceed 100%
+        st.progress = Math.min(st.progress, 1);
+
         // Check if route completed
         if (st.progress >= 1) {
           st.completed = true;
@@ -243,7 +275,7 @@ const RouteMap = () => {
           return;
         }
 
-        const pos = getPositionAlongPath(vPath, st.progress);
+        const pos = getPositionAlongPath(vPath, st.progress, st.direction === 'Inbound');
         if (!pos) return;
 
         // Check stop proximity
@@ -317,111 +349,149 @@ const RouteMap = () => {
 
   // Spawn effect - launch all departures that are overdue
   useEffect(() => {
-    if (!stops.length || !variants.length || !vehicles.length) return;
-
-    const currentPath = pathsRef.current[direction];
-    if (!currentPath || currentPath.length === 0) return; // path not ready yet
+    if (!stops.length || !variants.length) return;
 
     const line = variants.find(l => l.direction === direction);
-    if (!line?.schedule || !line.schedule.frequency) return;
+    const transportType = line?.type || 'Bus';
+    
+    // For Metro and Tram, they have direction: 'Both', so we spawn from that line
+    // For Bus, we spawn from the current direction
+    const linesToSpawn = (transportType === 'Metro' || transportType === 'Tram') 
+      ? variants.filter(l => l.direction === 'Both') 
+      : variants.filter(l => l.direction === direction);
 
-    const freq = parseInt(line.schedule.frequency);           // minutes
-    if (!freq || freq <= 0) return; // Invalid frequency
-
-    const [fh, fm] = line.schedule.firstDeparture.split(':').map(Number);
-    const firstMin = fh * 60 + fm;
-
-    // Use DevClock for schedule calculations
-    const simHours = simNow.getHours();
-    const simMinutes = simNow.getMinutes();
-    const nowMin = simHours * 60 + simMinutes;
-
-    // outside service hours?
-    const [lh, lm] = line.schedule.lastDeparture.split(':').map(Number);
-    const lastMin = lh * 60 + lm;
-    if (nowMin < firstMin || nowMin > lastMin) {
-      // Reset departure counter for next day - only for this direction
-      const currentDirectionSlots = Array.from(spawnedDeparturesRef.current).filter(slot => slot.startsWith(direction));
-      currentDirectionSlots.forEach(slot => spawnedDeparturesRef.current.delete(slot));
-      directionDepartureCountRef.current[direction] = 0;
-      setDepartureCount(0);
-      setLastDepartureTime(null);
-      // Remove vehicles for this direction that are outside service hours
-      setActiveVehicles(prev => {
-        const newSet = new Set();
-        prev.forEach(vehicleId => {
-          const state = vehicleStateRef.current[vehicleId];
-          if (state && state.direction !== direction) {
-            newSet.add(vehicleId); // Keep vehicles from other directions
-          }
-        });
-        return newSet;
-      });
-      return;
-    }
-
-    // Get current departure count for this direction
-    const currentDepartureCount = directionDepartureCountRef.current[direction] || 0;
-
-    // Calculate how many buses should be running based on current time
-    const expectedDepartures = Math.floor((nowMin - firstMin) / freq) + 1;
-
-    // Check each departure slot that should have happened by now
-    for (let i = currentDepartureCount; i < expectedDepartures; i++) {
-      const departureSlot = `${direction}-${i}`;
-      const departureMinute = firstMin + (i * freq);
+    linesToSpawn.forEach(currentLine => {
+      const currentDirection = currentLine.direction;
       
-      // If this departure time has passed and we haven't spawned it yet
-      if (nowMin >= departureMinute && !spawnedDeparturesRef.current.has(departureSlot)) {
-        // Create a unique vehicle for this departure
-        const baseVehicle = vehicles[0];
-        const vehicleId = `bus-${direction}-${i}-${Date.now()}`;
+      // For 'Both' direction lines, we need to create both inbound and outbound paths
+      const directionsToCreate = currentDirection === 'Both' 
+        ? ['Outbound', 'Inbound']
+        : [currentDirection];
 
-        // Start from first stop (index 0) regardless of direction
-        const startPos = [
-          stops[0].location.coordinates[1], // lat
-          stops[0].location.coordinates[0]  // lng
-        ];
+      directionsToCreate.forEach(pathDirection => {
+        const currentPath = pathsRef.current[pathDirection] || pathsRef.current[currentDirection];
+        if (!currentPath || currentPath.length === 0) return; // path not ready yet
 
-        vehicleStateRef.current[vehicleId] = {
-          progress: 0,
-          speed: (40 + Math.random() * 20) * 50, // 400-600 km/h (50x faster)
-          pauseUntil: 0,
-          direction,
-          visitedStops: new Set(),
-          completed: false,
-          departureTime: new Date(simNow),
-          departureIndex: i,
-          busNumber: baseVehicle?.number || 'Bus',
-        };
-        vehiclePositionsRef.current[vehicleId] = startPos;
-        
-        setActiveVehicles(prev => new Set([...prev, vehicleId]));
-        directionDepartureCountRef.current[direction] = i + 1;
-        setDepartureCount(i + 1); // Update state for display
-        setLastDepartureTime(simNow);
-        spawnedDeparturesRef.current.add(departureSlot); // Mark this departure as spawned
-        
-        console.log(`🚌 Spawned bus ${vehicleId} at ${simNow.toLocaleTimeString()} (departure #${i + 1})`);
-      }
-    }
+        // rough travel time (min) – tune avgSpeed as you like
+        const avgSpeedKmH = 35;
+        const tripMinutes = (pathLengthKm(currentPath) / avgSpeedKmH) * 60;
+
+        if (!currentLine?.schedule || !currentLine.schedule.frequency) return;
+
+        const freq = parseInt(currentLine.schedule.frequency);
+        if (!freq || freq <= 0) return; // Invalid frequency
+
+        const [fh, fm] = currentLine.schedule.firstDeparture.split(':').map(Number);
+        const firstMin = fh * 60 + fm;
+
+        // Use DevClock for schedule calculations
+        const simHours = simNow.getHours();
+        const simMinutes = simNow.getMinutes();
+        const nowMin = simHours * 60 + simMinutes;
+
+        // outside service hours?
+        const [lh, lm] = currentLine.schedule.lastDeparture.split(':').map(Number);
+        const lastMin = lh * 60 + lm;
+        if (nowMin < firstMin || nowMin > lastMin) {
+          // Reset departure counter for next day
+          const currentDirectionSlots = Array.from(spawnedDeparturesRef.current).filter(slot => slot.startsWith(pathDirection));
+          currentDirectionSlots.forEach(slot => spawnedDeparturesRef.current.delete(slot));
+          directionDepartureCountRef.current[pathDirection] = 0;
+          if (pathDirection === direction) {
+            setDepartureCount(0);
+            setLastDepartureTime(null);
+          }
+          // Remove vehicles for this direction that are outside service hours
+          setActiveVehicles(prev => {
+            const newSet = new Set();
+            prev.forEach(vehicleId => {
+              const state = vehicleStateRef.current[vehicleId];
+              if (state && state.direction !== pathDirection) {
+                newSet.add(vehicleId); // Keep vehicles from other directions
+              }
+            });
+            return newSet;
+          });
+          return;
+        }
+
+        // Get current departure count for this direction
+        const currentDepartureCount = directionDepartureCountRef.current[pathDirection] || 0;
+
+        // Calculate how many buses should be running based on current time
+        const expectedDepartures = Math.floor((nowMin - firstMin) / freq) + 1;
+
+        // Check each departure slot that should have happened by now
+        for (let i = currentDepartureCount; i < expectedDepartures; i++) {
+          const departureSlot = `${pathDirection}-${i}`;
+          const departureMinute = firstMin + (i * freq);
+          
+          const elapsed = nowMin - departureMinute;
+          if (elapsed < 0) continue;                    // not due yet
+          if (elapsed > tripMinutes) {                  // finished – mark & skip
+            spawnedDeparturesRef.current.add(departureSlot);
+            continue;
+          }
+
+          const progress0 = elapsed / tripMinutes;      // 0-1 starting point
+          
+          // If this departure time has passed and we haven't spawned it yet
+          if (!spawnedDeparturesRef.current.has(departureSlot)) {
+            // Create a unique vehicle for this departure
+            const vehicleId = `${transportType.toLowerCase()}-${pathDirection}-${i}-${Date.now()}`;
+
+            // Start from the correct terminus based on direction
+            const startPos =
+              pathDirection === 'Inbound'
+                ? currentPath[currentPath.length - 1]   // last point → real inbound origin
+                : currentPath[0];                       // first point → outbound origin
+
+            vehicleStateRef.current[vehicleId] = {
+              progress: progress0,
+              speed: (40 + Math.random() * 20) * 50, // 400-600 km/h (50x faster)
+              pauseUntil: 0,
+              direction: pathDirection,
+              visitedStops: new Set(),
+              completed: false,
+              departureTime: new Date(simNow),
+              departureIndex: i,
+              busNumber: transportType,
+            };
+            vehiclePositionsRef.current[vehicleId] = startPos;
+            
+            setActiveVehicles(prev => new Set([...prev, vehicleId]));
+            directionDepartureCountRef.current[pathDirection] = i + 1;
+            if (pathDirection === direction) {
+              setDepartureCount(i + 1); // Update state for display
+              setLastDepartureTime(simNow);
+            }
+            spawnedDeparturesRef.current.add(departureSlot); // Mark this departure as spawned
+            
+            console.log(`🚌 Spawned ${transportType.toLowerCase()} ${vehicleId} at ${simNow.toLocaleTimeString()} (departure #${i + 1})`);
+          }
+        }
+      });
+    });
   }, [simNow, variants, vehicles, direction, stops]);
 
-  const getPositionAlongPath = (path, progress) => {
+  const getPositionAlongPath = (path, progress, isInbound) => {
     if (!path || path.length < 2) return null;
     
-    const totalDistance = path.reduce((acc, point, i) => {
+    // Path is already oriented correctly
+    const workingPath = path;
+    
+    const totalDistance = workingPath.reduce((acc, point, i) => {
       if (i === 0) return 0;
-      const prev = path[i - 1];
+      const prev = workingPath[i - 1];
       return acc + L.latLng(prev).distanceTo(L.latLng(point));
     }, 0);
 
     let targetDistance = totalDistance * progress;
     let coveredDistance = 0;
 
-    for (let i = 1; i < path.length; i++) {
-      const prev = path[i - 1];
-      const current = path[i];
+    for (let i = 1; i < workingPath.length; i++) {
+      const prev = workingPath[i - 1];
+      const current = workingPath[i];
       const segmentDistance = L.latLng(prev).distanceTo(L.latLng(current));
 
       if (coveredDistance + segmentDistance >= targetDistance) {
@@ -437,7 +507,7 @@ const RouteMap = () => {
       coveredDistance += segmentDistance;
     }
 
-    return path[path.length - 1];
+    return workingPath[workingPath.length - 1];
   };
 
   // Create SimClock component inline to access simNow from parent scope
@@ -490,60 +560,112 @@ const RouteMap = () => {
       {/* Route info panel */}
       <div className="absolute top-4 right-4 z-[1000] bg-white p-4 rounded-md shadow-md">
         <h2 className="font-bold text-lg">
-          {variants.find(l => l.direction === direction)?.longName}
+          {(variants.find(l => l.direction === direction) || variants.find(l => l.direction === 'Both'))?.longName}
         </h2>
         
         {/* Direction toggle */}
         <div className="mt-2">
-          <button
-            className={`px-2 py-1 mr-2 rounded ${
-              direction === 'Outbound' ? 'bg-green-600 text-white' : 'bg-gray-200'
-            }`}
-            onClick={() => setDirection('Outbound')}
-          >
-            Outbound
-          </button>
-          <button
-            className={`px-2 py-1 rounded ${
-              direction === 'Inbound' ? 'bg-blue-600 text-white' : 'bg-gray-200'
-            }`}
-            onClick={() => setDirection('Inbound')}
-          >
-            Inbound
-          </button>
+          {(() => {
+            const activeLine = variants.find(l => l.direction === direction) || variants.find(l => l.direction === 'Both');
+            const transportType = activeLine?.type || 'Bus';
+            
+            // For Metro and Tram, show both directions simultaneously
+            if (transportType === 'Metro' || transportType === 'Tram') {
+              return (
+                <div className="text-sm text-gray-600">
+                  <span className="px-2 py-1 rounded bg-gray-800 text-white">
+                    Both Directions Active
+                  </span>
+                </div>
+              );
+            }
+            
+            // For Bus, show direction toggle with updated colors
+            return (
+              <>
+                <button
+                  className={`px-2 py-1 mr-2 rounded ${
+                    direction === 'Outbound' ? 'bg-orange-600 text-white' : 'bg-gray-200'
+                  }`}
+                  onClick={() => setDirection('Outbound')}
+                >
+                  Outbound
+                </button>
+                <button
+                  className={`px-2 py-1 rounded ${
+                    direction === 'Inbound' ? 'bg-blue-600 text-white' : 'bg-gray-200'
+                  }`}
+                  onClick={() => setDirection('Inbound')}
+                >
+                  Inbound
+                </button>
+              </>
+            );
+          })()}
         </div>
 
         <div className="text-sm text-gray-600">
-          <p>Route: {variants.find(l => l.direction === direction)?.number}</p>
-          <p>Schedule: {variants.find(l => l.direction === direction)?.schedule?.firstDeparture} - {variants.find(l => l.direction === direction)?.schedule?.lastDeparture}</p>
-          <p>Frequency: Every {variants.find(l => l.direction === direction)?.schedule?.frequency} minutes</p>
           {(() => {
-            const directionVehicles = Array.from(activeVehicles).filter(vehicleId => {
-              const state = vehicleStateRef.current[vehicleId];
-              return state && state.direction === direction;
-            });
+            const activeLine = variants.find(l => l.direction === direction) || variants.find(l => l.direction === 'Both');
             return (
               <>
-                <p className="mt-2">Active Vehicles: {directionVehicles.length}</p>
-                <p>Total Departures: {directionDepartureCountRef.current[direction] || 0}</p>
-                {directionVehicles.length > 0 && (
-                  <div className="mt-2 text-xs">
-                    <p className="font-medium">Running Buses:</p>
-                    {directionVehicles.map(vehicleId => {
-                      const state = vehicleStateRef.current[vehicleId];
-                      const displayName = state?.busNumber || 'Bus';
-                      const colorClass = state?.direction === 'Inbound' ? 'text-blue-600' : 'text-green-600';
-                      
-                      return (
-                        <div key={vehicleId} className="ml-2">
-                          <span className={colorClass}>{displayName}</span> - {state ? ` ${Math.round(state.progress * 100)}%` : ' Loading...'}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                <p>Route: {activeLine?.number}</p>
+                <p>Schedule: {activeLine?.schedule?.firstDeparture} - {activeLine?.schedule?.lastDeparture}</p>
+                <p>Frequency: Every {activeLine?.schedule?.frequency} minutes</p>
               </>
             );
+          })()}
+          {(() => {
+            const activeLine = variants.find(l => l.direction === direction) || variants.find(l => l.direction === 'Both');
+            const transportType = activeLine?.type || 'Bus';
+            
+            // For Metro/Tram, show vehicles from both directions
+            if (transportType === 'Metro' || transportType === 'Tram') {
+              const allVehicles = Array.from(activeVehicles);
+              const outboundVehicles = allVehicles.filter(vehicleId => {
+                const state = vehicleStateRef.current[vehicleId];
+                return state && state.direction === 'Outbound';
+              });
+              const inboundVehicles = allVehicles.filter(vehicleId => {
+                const state = vehicleStateRef.current[vehicleId];
+                return state && state.direction === 'Inbound';
+              });
+              
+              return (
+                <>
+                  <p className="mt-2">Active Vehicles: {allVehicles.length} (Out: {outboundVehicles.length}, In: {inboundVehicles.length})</p>
+                  <p>Total Departures: Out: {directionDepartureCountRef.current['Outbound'] || 0}, In: {directionDepartureCountRef.current['Inbound'] || 0}</p>
+                </>
+              );
+            } else {
+              // For Bus, show current direction only
+              const directionVehicles = Array.from(activeVehicles).filter(vehicleId => {
+                const state = vehicleStateRef.current[vehicleId];
+                return state && state.direction === direction;
+              });
+              return (
+                <>
+                  <p className="mt-2">Active Vehicles: {directionVehicles.length}</p>
+                  <p>Total Departures: {directionDepartureCountRef.current[direction] || 0}</p>
+                  {directionVehicles.length > 0 && (
+                    <div className="mt-2 text-xs">
+                      <p className="font-medium">Running Buses:</p>
+                      {directionVehicles.map(vehicleId => {
+                        const state = vehicleStateRef.current[vehicleId];
+                        const displayName = state?.busNumber || 'Bus';
+                        const colorClass = state?.direction === 'Inbound' ? 'text-blue-600' : 'text-green-600';
+                        
+                        return (
+                          <div key={vehicleId} className="ml-2">
+                            <span className={colorClass}>{displayName}</span> - {state ? ` ${Math.round(state.progress * 100)}%` : ' Loading...'}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              );
+            }
           })()}
         </div>
       </div>
@@ -557,17 +679,61 @@ const RouteMap = () => {
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         
         {/* Route path */}
-        {routePath.length > 0 && (
-          <Polyline
-            ref={polylineRef}
-            positions={routePath}
-            pathOptions={{ 
-              color: direction?.toLowerCase() === 'inbound' ? '#3b82f6' : '#22c55e',
-              weight: 4,
-              opacity: 0.8
-            }}
-          />
-        )}
+        {(() => {
+          const activeLine = variants.find(l => l.direction === direction) || variants.find(l => l.direction === 'Both');
+          const transportType = activeLine?.type || 'Bus';
+          
+          // For Metro and Tram, show both direction paths
+          if (transportType === 'Metro' || transportType === 'Tram') {
+            // Show both Outbound and Inbound paths
+            const outboundPath = pathsRef.current['Outbound'];
+            const inboundPath = pathsRef.current['Inbound'];
+            
+            return (
+              <>
+                {outboundPath && outboundPath.length > 0 && (
+                  <Polyline
+                    key="outbound"
+                    positions={outboundPath}
+                    pathOptions={{ 
+                      color: transportType === 'Metro' ? '#dc2626' : '#22c55e',
+                      weight: 4,
+                      opacity: 0.8
+                    }}
+                  />
+                )}
+                {inboundPath && inboundPath.length > 0 && (
+                  <Polyline
+                    key="inbound"
+                    positions={inboundPath}
+                    pathOptions={{ 
+                      color: transportType === 'Metro' ? '#dc2626' : '#22c55e',
+                      weight: 4,
+                      opacity: 0.6
+                    }}
+                  />
+                )}
+              </>
+            );
+          }
+          
+          // For Bus, show single direction path
+          if (routePath.length > 0) {
+            return (
+              <Polyline
+                ref={polylineRef}
+                positions={routePath}
+                pathOptions={{ 
+                  color: direction?.toLowerCase() === 'inbound' ? '#3b82f6' : '#f97316', // Blue for inbound, Orange for outbound
+                  weight: 4,
+                  opacity: 0.8
+                }}
+              />
+            );
+          }
+          
+          return null;
+        })()}
 
         {/* Stops */}
         {stops.map(stop => (
@@ -585,25 +751,38 @@ const RouteMap = () => {
         {/* Vehicles */}
         {Array.from(activeVehicles).filter(vehicleId => {
           const state = vehicleStateRef.current[vehicleId];
+          const activeLine = variants.find(l => l.direction === direction) || variants.find(l => l.direction === 'Both');
+          const transportType = activeLine?.type || 'Bus';
+          
+          // For Metro and Tram, show vehicles from both directions
+          if (transportType === 'Metro' || transportType === 'Tram') {
+            return state; // Show all vehicles regardless of direction
+          }
+          
+          // For Bus, filter by direction
           return state && state.direction === direction;
         }).map(vehicleId => {
           const position = vehiclePositionsRef.current[vehicleId];
           const state = vehicleStateRef.current[vehicleId];
           if (!position || !state) return null;
 
+          // Get the transport type for the correct icon
+          const activeLine = variants.find(l => l.direction === direction) || variants.find(l => l.direction === 'Both');
+          const transportType = activeLine?.type || 'Bus';
+
           return (
             <Marker
               key={vehicleId}
               position={position}
-              icon={vehicleIcon}
+              icon={createVehicleIcon(transportType)}
             >
               <Popup>
                 <div>
-                  <div className="font-semibold">{state.busNumber}</div>
+                  <div className="font-semibold">{state.busNumber} ({state.direction})</div>
                   <div className="text-sm">Progress: {Math.round(state.progress * 100)}%</div>
                   <div className="text-sm">Speed: {Math.round(state.speed)} km/h</div>
                   <div className="text-sm">
-                    Schedule: Every {variants.find(l => l.direction === direction)?.schedule?.frequency} minutes
+                    Schedule: Every {activeLine?.schedule?.frequency} minutes
                   </div>
                 </div>
               </Popup>

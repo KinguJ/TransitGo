@@ -31,8 +31,8 @@ const vehicleSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Active', 'Inactive', 'Maintenance'],
-    default: 'Active'
+    enum: ['On Time', 'Delayed', 'Out of Service', 'Maintenance'],
+    default: 'On Time'
   }
 }, { timestamps: true });
 

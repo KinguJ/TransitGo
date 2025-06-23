@@ -92,7 +92,7 @@ const EditStopsPanel = ({
       // Log the final data being sent
       console.log('Sending stop data:', JSON.stringify(stopData, null, 2));
 
-      const response = await axios.post('/api/stops', stopData);
+      const response = await axios.post('/stops', stopData);
 
       console.log('Server response:', response.data);
 
@@ -110,7 +110,7 @@ const EditStopsPanel = ({
 
   const handleUpdateLocation = async (latlng) => {
     try {
-      const response = await axios.patch(`/api/stops/${selectedStop._id}/location`, {
+      const response = await axios.patch(`/stops/${selectedStop._id}/location`, {
         lng: latlng.lng,
         lat: latlng.lat
       });
@@ -132,7 +132,7 @@ const EditStopsPanel = ({
     try {
       console.log('Updating stop:', selectedStop._id, 'with name:', selectedStop.name);
       
-      const response = await axios.put(`/api/stops/${selectedStop._id}`, {
+      const response = await axios.put(`/stops/${selectedStop._id}`, {
         name: selectedStop.name
       });
       
@@ -150,7 +150,7 @@ const EditStopsPanel = ({
 
   const handleDeleteStop = async (stopId) => {
     try {
-      await axios.delete(`/api/stops/${stopId}`);
+      await axios.delete(`/stops/${stopId}`);
       
       // Update stops array locally
       setStops(prevStops => prevStops.filter(stop => stop._id !== stopId));

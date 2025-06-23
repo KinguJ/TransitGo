@@ -15,6 +15,8 @@ import { useMapEvents } from 'react-leaflet';
 // Import icons
 import busStopIcon from '../../assets/bus-stop.png';
 import busIcon from '../../assets/bus-icon.png';
+import tramIcon from '../../assets/tram-icon.png';
+import metroIcon from '../../assets/metro-icon.png';
 
 // Create custom icons
 const stopIcon = new L.Icon({
@@ -24,25 +26,48 @@ const stopIcon = new L.Icon({
   popupAnchor: [0, -32]
 });
 
-const vehicleIcon = new L.Icon({
-  iconUrl: busIcon,
-  iconSize: [32, 32],
-  iconAnchor: [16, 16],
-  popupAnchor: [0, -16]
-});
+const createVehicleIcon = (vehicleType) => {
+  let iconUrl;
+  switch (vehicleType) {
+    case 'Metro':
+      iconUrl = metroIcon;
+      break;
+    case 'Tram':
+      iconUrl = tramIcon;
+      break;
+    case 'Bus':
+    default:
+      iconUrl = busIcon;
+      break;
+  }
+  
+  return new L.Icon({
+    iconUrl,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+    popupAnchor: [0, -16]
+  });
+};
 
 // Add this at the top, outside the component
 const initVehicleState = (vehicles, lines) =>
   Object.fromEntries(
     vehicles.map(v => {
       const line = lines.find(l => l._id === v.lineId);
+      
+      // For Metro/Tram lines with 'Both' direction, randomly assign Outbound or Inbound
+      let direction = line?.direction || 'Outbound';
+      if (direction === 'Both') {
+        direction = Math.random() < 0.5 ? 'Outbound' : 'Inbound';
+      }
+      
       return [
         v._id,
         {
           progress: 0,              
           speed: 2500 + Math.random() * 1500,
           pauseUntil: 0,           
-          direction: line?.direction || 'Outbound',
+          direction: direction,
           lastTrafficCheck: 0,
           visitedStops: new Set(),  // Always initialize visitedStops
         },
@@ -135,7 +160,8 @@ const AdminMap = () => {
         })
         .filter(Boolean);
 
-      const coordinates = await getRouteCoordinates(stopPoints);
+      const transportType = line.type || 'Bus';
+      const coordinates = await getRouteCoordinates(stopPoints, transportType);
       setRoutePath(coordinates);
     };
 
@@ -242,7 +268,8 @@ const AdminMap = () => {
               })
               .filter(Boolean);
             
-            const coordinates = await getRouteCoordinates(stopPoints);
+            const transportType = line.type || 'Bus';
+            const coordinates = await getRouteCoordinates(stopPoints, transportType);
             paths[vehicle._id] = coordinates;
           }
         }
@@ -286,7 +313,7 @@ const AdminMap = () => {
 
         /* -------- handle active pause -------- */
         if (now < st.pauseUntil) {
-          newPositions[v._id] = getPositionAlongPath(path, st.progress);
+          newPositions[v._id] = getPositionAlongPath(path, st.progress, st.direction === 'Inbound');
           return;
         }
 
@@ -303,8 +330,8 @@ const AdminMap = () => {
         }
 
         /* -------- check stop proximity -------- */
-        const pos = getPositionAlongPath(path, st.progress);
-        const nextPos = getPositionAlongPath(path, st.progress + 0.001);
+        const pos = getPositionAlongPath(path, st.progress, st.direction === 'Inbound');
+        const nextPos = getPositionAlongPath(path, st.progress + 0.001, st.direction === 'Inbound');
         if (!pos || !nextPos) return;
 
         const STOP_RADIUS = 20;            // m
@@ -326,7 +353,9 @@ const AdminMap = () => {
           const dist = L.latLng(pos).distanceTo(L.latLng(stopPos));
 
           // progress of this stop along the *current* direction
-          const stopProg = idx / (line.stopIds.length - 1);
+          const stopProg = st.direction === 'Inbound' 
+            ? (line.stopIds.length - 1 - idx) / (line.stopIds.length - 1)
+            : idx / (line.stopIds.length - 1);
 
           // skip if we are already past the stop by more than MIN_GAP
           if (st.progress > stopProg + MIN_GAP) return;
@@ -336,7 +365,7 @@ const AdminMap = () => {
             newPositions[v._id] = stopPos;      // optional, looks cleaner
             st.pauseUntil = now + 1000;         // 1 s dwell time
             st.visitedStops.add(stopId);
-            console.log(`Bus ${v._id} served stop ${stop.name}`);
+            console.log(`${line.type || 'Bus'} ${v._id} served stop ${stop.name} (${st.direction})`);
           }
         });
 
@@ -345,7 +374,7 @@ const AdminMap = () => {
         if (now - st.lastTrafficCheck > TRAFFIC_CHECK_INTERVAL) {
           st.lastTrafficCheck = now;
           if (Math.random() < 0.10) { // 10% chance of traffic
-            console.log(`Bus ${v._id} hit traffic at position:`, pos);
+            console.log(`${line.type || 'Bus'} ${v._id} hit traffic at position:`, pos);
             st.pauseUntil = now + (500 + Math.random()*1000); // 0.5-1.5 seconds
           }
         }
@@ -522,6 +551,8 @@ const AdminMap = () => {
       const state = vehicleStateRef.current[vehicle._id];
       if (!position || !state) return null;
 
+      const vehicleIcon = createVehicleIcon(vehicle.type);
+
       return (
         <Marker
           key={vehicle._id}
@@ -546,7 +577,7 @@ const AdminMap = () => {
   // Add this function to handle direction changes
   const handleStopDirectionChange = async (stopId, newDirection) => {
     try {
-      await axios.patch(`/api/stops/${stopId}`, { direction: newDirection });
+      await axios.patch(`/stops/${stopId}`, { direction: newDirection });
       // Update local state
       setStops(prev =>
         prev.map(s =>
@@ -598,9 +629,18 @@ const AdminMap = () => {
             ref={polylineRef}
             positions={routePath}
             pathOptions={{ 
-              color: selectedLineId && lines.find(l => l._id === selectedLineId)?.direction?.toLowerCase() === 'inbound'
-                ? '#3b82f6' // Blue for inbound
-                : '#22c55e', // Green for outbound
+              color: (() => {
+                const selectedLine = lines.find(l => l._id === selectedLineId);
+                if (!selectedLine) return '#22c55e';
+                
+                const transportType = selectedLine.type || 'Bus';
+                
+                if (transportType === 'Metro') return '#dc2626'; // Red for Metro
+                if (transportType === 'Tram') return '#22c55e';  // Green for Tram
+                
+                // Bus colors based on direction
+                return selectedLine.direction?.toLowerCase() === 'inbound' ? '#3b82f6' : '#f97316'; // Blue for inbound, Orange for outbound
+              })(),
               weight: 6, 
               opacity: 0.8 
             }}
@@ -614,7 +654,7 @@ const AdminMap = () => {
             pathOptions={{ 
               color: selectedStopId && stops.find(s => s._id === selectedStopId)?.direction?.toLowerCase() === 'inbound'
                 ? '#3b82f6' // Blue for inbound
-                : '#22c55e', // Green for outbound
+                : '#f97316', // Orange for outbound
               weight: 6, 
               opacity: 0.8 
             }}
@@ -641,6 +681,7 @@ const AdminMap = () => {
             lines={lines}
             setLines={setLines}
             stops={stops}
+            vehicles={vehicles}
             onLineSelect={handleLineSelect}
             selectedLineId={selectedLineId}
             panelMode={mode}

@@ -6,9 +6,17 @@ require('dotenv').config();
 const app = express();
 
 // Enable CORS for frontend
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:8081',
+];
 app.use(cors({
-  origin: 'http://localhost:3000',
-  credentials: true
+  origin: (origin, cb) => {
+    // no origin (curl / Postman) => allow
+    if (!origin) return cb(null, true);
+    return cb(null, allowedOrigins.includes(origin));
+  },
+  credentials: true,
 }));
 
 // Request logging middleware
